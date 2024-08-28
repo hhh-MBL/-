@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multiplier Display</title>
+    <title>Mines Game</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -16,16 +16,6 @@
             margin: 0;
             position: relative;
         }
-        #multiplier {
-            font-size: 48px;
-            font-weight: bold;
-            color: #333;
-        }
-        #crashStatus {
-            font-size: 24px;
-            color: #e74c3c;
-            margin-top: 10px;
-        }
         #coins {
             position: absolute;
             top: 10px;
@@ -33,16 +23,50 @@
             font-size: 20px;
             color: #333;
         }
-        #bet {
-            margin-top: 10px;
+        #betSection {
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
-        #anotherGame {
-            margin-top: 50px;
-            padding: 10px;
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(5, 60px);
+            grid-template-rows: repeat(5, 60px);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .box {
+            width: 60px;
+            height: 60px;
             background-color: #ddd;
-            border: 1px solid #ccc;
+            border-radius: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            cursor: pointer;
         }
-        /* Popup styles */
+        .revealed {
+            background-color: #add8e6;
+        }
+        .mine {
+            background-color: #e74c3c;
+        }
+        .disabled {
+            cursor: not-allowed;
+            background-color: #ccc;
+        }
+        #multiplier {
+            margin-top: 20px;
+            font-size: 24px;
+            color: #333;
+        }
+        #result {
+            margin-top: 20px;
+            font-size: 24px;
+            color: #333;
+        }
         #popup {
             display: none;
             position: fixed;
@@ -75,91 +99,167 @@
 </head>
 <body>
     <div id="coins">Coins: 0</div>
-    <div id="multiplier">Loading...</div>
-    <div id="crashStatus"></div>
-    <div id="bet">
+    <div id="betSection">
         <input type="number" id="betAmount" placeholder="Enter bet amount" />
-        <button onclick="placeBet()">Place Bet</button>
-        <button onclick="cashOut()">Cash Out</button>
+        <input type="number" id="numMines" placeholder="Number of mines (1-24)" />
+        <button onclick="startGame()">Start Game</button>
     </div>
-    <div id="anotherGame">
-        <p>Another Game Placeholder</p>
-    </div>
+    <div id="grid"></div>
+    <div id="multiplier">Multiplier: 1.00x</div>
+    <div id="result"></div>
+    <button onclick="cashOut()">Cash Out</button>
 
     <!-- Popup -->
     <div id="popup">
-        <button class="close-btn" onclick="closePopup()">×</button>
         <p class="message">Popup message here</p>
+        <button class="close-btn" onclick="closePopup()">×</button>
     </div>
 
     <script>
-        const userId = '1'; // Example userId; replace with dynamic userId if applicable
+        const userId = '1';
+        let gameActive = false;
+        let gridSize = 25;
+        let revealed = new Set();
 
-        function fetchMultiplier() {
-            fetch('http://localhost:3000/api/multiplier?userId=' + userId)
+        function fetchBalance() {
+            fetch(`http://localhost:3000/api/user?userId=${userId}`)
                 .then(response => response.json())
                 .then(data => {
-                    document.getElementById('multiplier').innerText = `Multiplier: ${data.multiplier.toFixed(2)}x`;
                     document.getElementById('coins').innerText = `Coins: ${data.coins}`;
-                    
-                    if (!data.gameActive) {
-                        document.getElementById('crashStatus').innerText = 'Place your bets!';
-                    } else if (data.crashed) {
-                        document.getElementById('crashStatus').innerText = 'Game Crashed!';
-                    } else {
-                        document.getElementById('crashStatus').innerText = '';
-                    }
                 })
-                .catch(error => {
-                    console.error('Error fetching multiplier data:', error);
-                });
+                .catch(error => console.error('Error fetching balance:', error));
         }
 
-        function placeBet() {
+        function startGame() {
             const betAmount = parseFloat(document.getElementById('betAmount').value);
+            const numMines = parseInt(document.getElementById('numMines').value);
 
             if (isNaN(betAmount) || betAmount <= 0) {
                 showPopup("Please enter a valid bet amount.");
                 return;
             }
+            if (isNaN(numMines) || numMines < 1 || numMines > 24) {
+                showPopup("Please enter a valid number of mines (1-24).");
+                return;
+            }
 
-            fetch('http://localhost:3000/api/placeBet', {
+            fetch('http://localhost:3000/api/startGame', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ betAmount, userId })
+                body: JSON.stringify({ betAmount, userId, numMines })
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    fetchMultiplier(); // Update multiplier and coins after placing bet
-                } else {
-                    showPopup(data.message);
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        gameActive = true;
+                        gridSize = data.gridSize;
+                        revealed = new Set();
+                        updateGrid();
+                        updateMultiplier(data.multiplier);
+                        fetchBalance(); // Update balance after starting the game
+                    } else {
+                        showPopup(data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error starting game:', error);
+                    showPopup("An error occurred while starting the game.");
+                });
+        }
+
+        function updateGrid() {
+            const grid = document.getElementById('grid');
+            grid.innerHTML = '';
+            for (let i = 0; i < gridSize; i++) {
+                const box = document.createElement('div');
+                box.classList.add('box');
+                if (!gameActive) {
+                    box.classList.add('disabled');
                 }
+                box.addEventListener('click', () => revealBox(i));
+                grid.appendChild(box);
+            }
+        }
+
+        function revealBox(boxIndex) {
+            if (!gameActive || revealed.has(boxIndex)) return;
+
+            fetch('http://localhost:3000/api/reveal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, boxIndex })
             })
-            .catch(error => {
-                console.error('Error placing bet:', error);
-                showPopup("An error occurred while placing your bet.");
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        revealed.add(boxIndex);
+                        updateRevealedBoxes();
+                        updateMultiplier(data.multiplier);
+                        
+                        if (data.autoCashOut) {
+                            gameActive = false;
+                            updateGrid(); // Disable further interaction
+                            fetchBalance(); // Update balance after auto cash out
+                            showPopup(`You revealed all safe boxes and cashed out automatically! Your winnings: ${data.winnings.toFixed(2)} coins.`);
+                        }
+                    } else if (data.mineHit) {
+                        showMine(boxIndex);
+                        gameActive = false;
+                        showPopup("You hit a mine! Game over.");
+                    } else {
+                        showPopup(data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error revealing box:', error);
+                    showPopup("An error occurred while revealing the box.");
+                });
+        }
+
+        function updateRevealedBoxes() {
+            const boxes = document.querySelectorAll('.box');
+            boxes.forEach((box, index) => {
+                if (revealed.has(index)) {
+                    box.classList.add('revealed');
+                    box.innerText = '+';
+                    box.classList.remove('disabled');
+                }
             });
         }
 
+        function showMine(mineIndex) {
+            const box = document.querySelectorAll('.box')[mineIndex];
+            box.classList.add('mine');
+            box.innerText = '💣';
+        }
+
+        function updateMultiplier(multiplier) {
+            document.getElementById('multiplier').innerText = `Multiplier: ${multiplier.toFixed(2)}x`;
+        }
+
         function cashOut() {
+            if (!gameActive) return;
+
             fetch('http://localhost:3000/api/cashOut', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId })
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    fetchMultiplier(); // Update multiplier and coins after cashing out
-                } else {
-                    showPopup(data.message);
-                }
-            })
-            .catch(error => {
-                console.error('Error cashing out:', error);
-                showPopup("An error occurred while cashing out.");
-            });
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        gameActive = false;
+                        updateGrid(); // Disable further interaction
+                        fetchBalance(); // Update balance after cashing out
+                        showPopup(`You cashed out! Your winnings: ${data.winnings.toFixed(2)} coins.`);
+                    } else {
+                        showPopup(data.message);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error cashing out:', error);
+                    showPopup("An error occurred while cashing out.");
+                });
         }
 
         function showPopup(message) {
@@ -173,8 +273,10 @@
             popup.classList.remove('show');
         }
 
-        // Fetch multiplier data every 2 seconds
-        setInterval(fetchMultiplier, 2000);
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchBalance();  // Fetch the user's balance when the page loads
+            updateGrid();    // Initialize the grid when the page loads
+        });
     </script>
 </body>
 </html>
